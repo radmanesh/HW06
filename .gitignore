@@ -62,3 +62,4 @@ instructions/
 # output knitr html files, TODO: your output should be in a different folder
 *.html
 *.pdf
+Train.csv
