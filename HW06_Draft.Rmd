@@ -63,3 +63,183 @@ data <- data %>%
 ```{r eval-missing-removal}
 print(paste("Number of missing values:", sum(is.na(data))))
 ```
+
+
+
+```{r pageview-vis}
+# pageviews has around 0.1% missing values, needs to be imputed
+# plot pageviews histogram
+# limit pageviews to 50 in the plot
+ggplot(data, aes(x = pageviews)) + geom_histogram(binwidth = 1) + ggtitle("Pageviews Distribution") + theme_minimal() + xlim(0, 50)
+hist(data$pageviews, breaks = 100, col = "blue", xlab = "Pageviews", 
+     xlim= ,main = "Pageviews Distribution")
+
+#plot cumulative pageviews histogram for each customer
+data_modified <- data %>%
+  arrange(custId, visitStartTime) %>%
+  group_by(custId) %>%
+  mutate(cum_pageviews = cumsum(pageviews)) %>%
+  mutate(cum_revenue = cumsum(revenue))
+  
+
+ggplot(data_modified, aes(x = visitStartTime, y = cum_pageviews, group = custId)) + geom_line() + ggtitle("Cumulative Pageviews per Customer") + theme_minimal()
+
+# create new data frame with columns customerId, visitStartTime, cum_pageviews, cum_revenue, avg_pageviews, avg_revenue; so that each customer has one row
+data_modified <- data %>% 
+  add_column(
+    visitStartTime = 
+      as.numeric(as.POSIXct(data$visitStartTime, origin = "1970-01-01", tz = "UTC"))
+  ) %>%
+  arrange(custId, visitStartTime) %>%
+  group_by(custId) %>%
+  mutate(cum_pageviews = cumsum(pageviews)) %>%
+  mutate(cum_revenue = cumsum(revenue)) %>%
+  summarise(
+    visitStartTime = first(visitStartTime),
+    pageviews = sum(pageviews, na.rm = TRUE),
+    revenue = sum(revenue, na.rm = TRUE)
+  )
+data_modified$visitStartTime <- as.POSIXct(data_modified$visitStartTime, origin = "1970-01-01", tz = "UTC")
+# Convert 'pageviews' and 'revenue' to numeric, if they aren't already
+data_modified$pageviews <- as.numeric(data_modified$pageviews)
+data_modified$revenue <- as.numeric(data_modified$revenue)
+
+customer_summary <- data_modified %>%
+  group_by(custId) %>%
+  summarise(
+    first_visitStartTime = min(visitStartTime, na.rm = TRUE),
+    last_visitStartTime = max(visitStartTime, na.rm = TRUE),
+    cum_pageviews = sum(pageviews, na.rm = TRUE),
+    cum_revenue = sum(revenue, na.rm = TRUE),
+    avg_pageviews = mean(pageviews, na.rm = TRUE),
+    avg_revenue = mean(revenue, na.rm = TRUE)
+  )
+
+# plot histogram of cumulative pageviews
+ggplot(customer_summary, aes(x = cum_pageviews)) + 
+  geom_histogram(binwidth = 10) + 
+  xlim(0, 1000) +
+  ggtitle("Cumulative Pageviews Distribution") + theme_minimal()
+
+# plot histogram of cumulative pageviews
+ggplot(data_modified, aes(x = cum_pageviews)) + geom_histogram(binwidth = 100) + ggtitle("Cumulative Pageviews Distribution") + theme_minimal()
+
+```
+
+## Outlier Analysis
+
+```{r outliers}
+# Detect outliers using boxplots
+numeric_columns <- sapply(data, is.numeric)
+data_numeric <- data[, numeric_columns]
+
+
+
+par(mfrow = c(3, 3))
+# Boxplot for each numeric column
+for (col in names(data_numeric)) {
+  print(col)
+  pl <- 
+    ggplot(data, aes(x = col)) +
+      geom_boxplot() +
+      ggtitle(paste("Boxplot of", col)) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  plot(pl)
+  print(pl)
+}
+
+# Detect outliers using statistical methods
+outlier_summary <- sapply(data_numeric, function(x) {
+  if (length(unique(x)) > 1) {
+    return(outlier(x))
+  } else {
+    return(NA)
+  }
+})
+print(outlier_summary)
+```
+```{r vis-cont}
+library(corrplot)
+library(lubridate)
+cor_matrix <- cor(data_numeric, use = "complete.obs")
+corrplot(cor_matrix, method = "circle")
+
+# Calculate and visualize statistics
+unique_customers <- length(unique(data$custId))
+print(paste("Number of unique customers:", unique_customers))
+
+transactions_per_customer <- data %>% group_by(custId) %>% summarise(transactions = n())
+print(transactions_per_customer)
+
+avg_transactions_per_customer <- mean(transactions_per_customer$transactions)
+print(paste("Average transactions per customer:", avg_transactions_per_customer))
+
+avg_revenue_per_transaction <- data %>% group_by(custId) %>% summarise(avg_revenue = mean(revenue, na.rm = TRUE))
+print(avg_revenue_per_transaction)
+
+transactions_until_purchase <- data %>% group_by(custId) %>% summarise(transactions_until_purchase = min(which(revenue > 0)))
+print(transactions_until_purchase)
+
+# Visualize distributions
+ggplot(data, aes(x = revenue)) + geom_histogram(binwidth = 10) + ggtitle("Revenue Distribution") + theme_minimal()
+
+# Feature engineering
+data <- data %>%
+  arrange(custId, visitStartTime) %>%
+  group_by(custId) %>%
+  mutate(
+    visits_since_last_purchase = cumsum(ifelse(revenue > 0, 1, 0)),
+    session_number = row_number(),
+    lag_revenue = lag(revenue, order_by = visitStartTime),
+    time_since_first_visit = as.numeric(difftime(visitStartTime, first(visitStartTime), units = "days")),
+    time_between_visits = as.numeric(difftime(visitStartTime, lag(visitStartTime), units = "days")),
+    time_since_last_purchase = as.numeric(difftime(visitStartTime, lag(visitStartTime[revenue > 0]), units = "days")),
+    cum_pageviews = cumsum(pageviews),
+    cum_bounces = cumsum(bounces, na.rm = TRUE),
+    cum_time_on_site = cumsum(timeSinceLastVisit, na.rm = TRUE)
+  )
+
+# Summarize data into fixed windows
+data_summary <- data %>%
+  group_by(custId) %>%
+  summarise(
+    first_5_sessions = list(head(session_number, 5)),
+    avg_pageviews = mean(pageviews, na.rm = TRUE),
+    avg_bounces = mean(bounces, na.rm = TRUE),
+    avg_time_on_site = mean(timeSinceLastVisit, na.rm = TRUE)
+  )
+
+# Compute statistical summaries
+data_stats <- data %>%
+  group_by(custId) %>%
+  summarise(
+    mean_pageviews = mean(pageviews, na.rm = TRUE),
+    median_pageviews = median(pageviews, na.rm = TRUE),
+    max_pageviews = max(pageviews, na.rm = TRUE),
+    min_pageviews = min(pageviews, na.rm = TRUE),
+    sd_pageviews = sd(pageviews, na.rm = TRUE)
+  )
+
+# Count specific events/behaviors
+event_counts <- data %>%
+  group_by(custId) %>%
+  summarise(
+    num_bounces = sum(bounces, na.rm = TRUE),
+    num_mobile_sessions = sum(isMobile, na.rm = TRUE)
+  )
+
+# Calculate trends over time
+data_trends <- data %>%
+  group_by(custId) %>%
+  summarise(
+    pageviews_trend = coef(lm(pageviews ~ session_number))[2],
+    bounces_trend = coef(lm(bounces ~ session_number))[2]
+  )
+
+# Print summaries
+print(data_summary)
+print(data_stats)
+print(event_counts)
+print(data_trends)
+```
