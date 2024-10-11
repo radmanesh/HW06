@@ -1,0 +1,554 @@
+---
+title: "Homework6"
+author: "Aminur Rhaman Amin"
+date: "2024-10-09"
+output: html_document
+---
+output:
+  html_document:
+    df_print: paged
+  pdf_document: 
+    toc: true
+    toc_depth: 2
+    fig_caption: true
+    fig_width: 7
+    fig_height: 6
+    number_sections: true
+    df_print: kable
+geometry: margin=0.2in
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = normalizePath("."))
+knitr::opts_chunk$set(error = T)#, warning = F, message = F)
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+# Define a function to install missing packages and load them
+install_and_load_packages <- function(packages) {
+  for (pkg in packages) {
+    # Check if the package is installed, and if not, install it
+    if (!requireNamespace(pkg, quietly = TRUE)) {
+      install.packages(pkg)
+    }
+    # Load the package after installation
+    library(pkg, character.only = TRUE)
+  }
+}
+
+# Install required packages if they are not already installed and load them
+package_list <- c("plyr","tidyverse", "dplyr", "knitr","car","EnvStats","mice","VIM","forcats","scales","gridExtra","inspectdf","naniar","corrplot","caret","randomForest","ggrepel","moments", "psych","AppliedPredictiveModeling","FactoMineR","lubridate") # List of packages
+install_and_load_packages(package_list) # Install and load packages
+```
+
+# Predicting house prices
+
+```{r }
+# load data
+df <- read_csv("Train.csv", show_col_types = FALSE)
+```
+
+```{r }
+# Creating a list of missing values, sort in descending order
+missing_columns <- which(colSums(is.na(df)) > 0)
+sort(colSums(sapply(df[missing_columns], is.na)), decreasing = TRUE)
+```
+There is no missing values in custiId and no missing values in revenue; however, o in revenue indicates no transactions.
+
+```{r }
+# Check number of unique customers.
+length(unique(df$custId))
+
+```
+So there are 70,071 records and 47249 customers. 
+
+### Data Preparation
+
+#### Browser: I will rank the browser based on the revenue earned
+
+```{r }
+# Browser, lets have a look unique browser
+unique(df$browser)
+cat(" Number of browser used:",length(unique(df$browser)))
+```
+
+```{r }
+#Compute total revenue for each browser
+browser_revenue <- df %>%
+  group_by(browser) %>%
+  summarize(total_revenue = sum(revenue, na.rm = TRUE)) %>%
+  arrange(total_revenue)  # Sort by total revenue in ascending order
+
+# Assign ranks based on the sorted total revenue
+browser_revenue <- browser_revenue %>%
+  mutate(browser_rank = row_number() - 1) 
+
+# Join the browser_rank to df
+df <- df %>%
+  left_join(browser_revenue %>% select(browser, browser_rank), by = "browser")
+```
+
+#### channelGrouping: I will rank the channelGrouping based on the revenue earned
+
+```{r }
+# Compute total revenue for each browser
+channel_revenue <- df %>%
+  group_by(channelGrouping) %>%
+  summarize(total_revenue = sum(revenue, na.rm = TRUE)) %>%
+  arrange(total_revenue)  # Sort by total revenue in ascending order
+
+# Assign ranks based on the sorted total revenue 
+channel_revenue <- channel_revenue %>%
+  mutate(channel_rank = row_number() - 1)  
+
+# Join the rank to df 
+df <- df %>%
+  left_join(channel_revenue %>% select(channelGrouping, channel_rank), by = "channelGrouping")
+```
+
+#### VisistStartTime: convert to different section of day
+
+```{r }
+# Convert the epoch timestamps  to POSIXct
+df$visitStartTime <- as.POSIXct(df$visitStartTime, origin = "1970-01-01", tz = "UTC")
+# Extract the time (hours, minutes, seconds) from the POSIXct timestamps
+df$visitTime <- format(df$visitStartTime, "%H:%M:%S")
+
+# Extract only the hour from the time
+df$Visithour <- as.numeric(format(df$visitStartTime, "%H"))
+
+# Classify the time into part of the day they belong
+df$part_of_day <- case_when(
+  df$Visithour >= 4 & df$Visithour < 6 ~ "Early Morning",      # 4:00 AM - 6:00 AM
+  df$Visithour >= 6 & df$Visithour < 9 ~ "Morning",             # 6:00 AM - 9:00 AM
+  df$Visithour == 9 ~ "Late Morning",                      # 9:00 AM - 10:00 AM
+  df$Visithour >= 10 & df$Visithour < 12 ~ "Late Morning",      # 10:00 AM - 12:00 PM
+  df$Visithour == 12 ~ "Noon",                             # 12:00 PM
+  df$Visithour >= 13 & df$Visithour < 17 ~ "Afternoon",         # 1:00 PM - 5:00 PM
+  df$Visithour >= 17 & df$Visithour < 18 ~ "Late Afternoon",    # 5:00 PM - 6:00 PM
+  df$Visithour >= 18 & df$Visithour < 19 ~ "Early Evening",     # 6:00 PM - 7:00 PM
+  df$Visithour >= 19 & df$Visithour < 21 ~ "Evening",           # 7:00 PM - 9:00 PM
+  df$Visithour >= 21 & df$Visithour < 23 ~ "Late Evening",      # 9:00 PM - 11:00 PM
+  df$Visithour >= 23 | df$Visithour < 4 ~ "Night",              # 11:00 PM - 4:00 AM
+  TRUE ~ "Unknown"  # In case of any missing or unexpected values
+)
+```
+
+#### VisistorRank: It determines the number of time a visitor visited would rank high
+
+```{r }
+# Rank based on the max visit number
+df <- df %>%
+  group_by(custId) %>%
+  mutate(custRank = max(visitNumber, na.rm = TRUE)) %>%
+  ungroup()
+```
+
+#### RevenueType: When it is 0.00000 it is not a succesful attempt (0), else 1
+```{r }
+# RevenueType: When it is 0.00000 it is not a succesful attempt (0), else 1
+df <- df %>%
+  mutate(revenueType = ifelse(revenue == 0.00000, 0, 1))
+```
+
+
+#### droprecords of continent, subcontinent, country: if revenue is 0 as well as continent, subcontinent, country has missing values, the records do not hold any significant value. Also it is hard to replace the missing values with mode as I do not know if actually fits. 
+```{r }
+# droprecords of continent, subcontinent, country when revenue is also 0
+df <- df %>%
+  filter(!(revenue == 0 & is.na(continent) & is.na(subContinent) & is.na(country)))
+```
+
+#### The analysis shows when source is direct the medium is also organic
+```{r }
+# The analysis shows when source is direct the medium is also organic
+df <- df %>%
+  mutate(medium = ifelse(source == "(direct)" & is.na(medium), "organic", medium))
+
+```
+
+#### newVisits, bounces, adwordsClickInfo.isVideoAd and pageviews: for all these variables NA means no event so replaced by 0 as opposite to 1 when theere is event.
+```{r }
+# Using mutate with ifelse to replace NA with 0
+df <- df %>%
+  mutate(newVisits = ifelse(is.na(newVisits), 0, newVisits)) %>%
+  mutate(bounces = ifelse(is.na(bounces), 0, bounces))%>%
+  mutate(adwordsClickInfo.isVideoAd = ifelse(is.na(adwordsClickInfo.isVideoAd), 0, adwordsClickInfo.isVideoAd))%>%
+  mutate(pageviews = ifelse(is.na(pageviews), 0, pageviews))
+```
+
+
+#### operatingSystem: has 292 records of missing values, most of cases the device category of that record is mobile. 
+```{r }
+# Group by columns X, Y, and Z and count the number of occurrences for each group
+df_grouped <- df %>%
+  group_by(operatingSystem, browser, deviceCategory) %>%
+  summarize(count = n(), .groups = 'drop')  # Summarize the grouped data with a count of rows
+```
+
+When device category is mobile, browser Opera Mini then operating system will be Android
+When device category is desktop, browser Nokia Browser then operating system will be Windows
+When device category is desktop, browser CSM Click then operating system will be Windows
+When device category is desktop,  browser Nokia Browser then operating system will be Macintosh
+re LYF LS-4002 : it is mobile not desktop, browser, browser LYF LS-4002  then operating system will be Android
+Webbrowser Chrome has several operating system, the maximum is Windows. so I will impute with that.
+When device category is desktop, browser Nokia Apple-iPhone7C2  then operating system will be iOS.
+
+```{r }
+# Impute the operatingSystem based on the given conditions
+df <- df %>%
+  mutate(operatingSystem = case_when(
+    deviceCategory == "mobile" & browser == "Opera Mini" ~ "Android",                       
+    deviceCategory == "desktop" & browser == "Nokia Browser" ~ "Windows",                 
+    deviceCategory == "desktop" & browser == "CSM Click" ~ "Windows",                    
+    deviceCategory == "desktop" & browser == "Nokia Browser" ~ "Windows",               
+    deviceCategory == "desktop" & browser == "LYF_LS_4002_12" ~ "Android",                   
+    deviceCategory == "desktop" & browser == "Apple-iPhone7C2" ~ "iOS",             
+    deviceCategory == "desktop" & browser == "Mozilla Compatible Agent" ~ "	
+Macintosh",             # Condition 6
+    browser == "Chrome" & is.na(operatingSystem) ~ "Windows",                            
+    TRUE ~ operatingSystem  
+  ))
+```
+
+#### browser: has 1 record of missing values
+```{r }
+# Group by columns X, Y, and Z and count the number of occurrences for each group
+df_grouped <- df %>%
+  group_by(browser, operatingSystem,deviceCategory) %>%
+  summarize(count = n(), .groups = 'drop')  # Summarize the grouped data with a count of rows
+```
+
+```{r }
+# Impute the browser based on the given conditions
+df <- df %>%
+  mutate(browser = case_when(
+    deviceCategory == "mobile" & operatingSystem == "iOS" ~ "Safari",                           
+    TRUE ~ operatingSystem  
+  ))
+```
+
+
+#### Continent, country, subcontinent: has 1 missing records.
+```{r }
+# Define a custom function 
+get_mode <- function(x) {
+  uniq_x <- unique(x)  
+  uniq_x[which.max(tabulate(match(x, uniq_x)))]  
+}
+
+# Get the mode of the 'country' column
+country_mode <- get_mode(df$country)
+
+# Print the mode
+country_mode
+
+```
+Since most country is united states, so impute contry as United States, subContinent as Northern America, continent as Americas  
+
+
+```{r }
+# Impute country, subContinent, and continent based on conditions
+df <- df %>%
+  mutate(
+    country = ifelse(is.na(country), "United States", country),       
+    subContinent = ifelse(is.na(subContinent), "Northern America", subContinent), 
+    continent = ifelse(is.na(continent), "Americas", continent)      
+  )
+
+```
+
+
+#### drop region, metro  and city since they are huge missing variables and difficult to impute missing values.
+```{r }
+# Drop columns B and C
+df <- df %>% select(-region, -metro, -city)
+
+```
+
+#### drop campaign, networkDomain and topLevelDomain since they are huge missing variables and difficult to impute missing values.
+```{r }
+# Drop columns B and C
+df <- df %>% select(-campaign, -networkDomain, -topLevelDomain)
+
+```
+
+#### medium and source : has 2 nd 3 record of missing values respectively, will impute them with the mode
+```{r }
+# Group by columns X, Y, and Z and count the number of occurrences for each group
+df_grouped <- df %>%
+  group_by(medium, source) %>%
+  summarize(count = n(), .groups = 'drop')  # Summarize the grouped data with a count of rows
+```
+
+```{r }
+# Replace medium and source columns with their respective mode
+df <- df %>%
+  mutate(
+    medium = get_mode(medium),  # Replace medium with its mode
+    source = get_mode(source)   # Replace source with its mode
+  )
+```
+
+
+#### finally dropping columns that has lost of missing values and hard to impute.
+```{r }
+# Drop columns B and C
+df <- df %>% select(-keyword, -referralPath,- adContent, -adwordsClickInfo.page,-adwordsClickInfo.slot, -adwordsClickInfo.adNetworkType, -adwordsClickInfo.gclId,-sessionId)
+
+```
+
+#### date to weekdays, weekend
+```{r }
+# Create two new columns: one for the day of the week and another for Weekend/Weekday classification
+df <- df %>%
+  mutate(
+    day_of_week = weekdays(as.Date(date)),  # Extract the day of the week from the date
+    weekend_weekday = ifelse(day_of_week %in% c("Saturday", "Sunday"), "Weekend", "Weekday")  # Classify as Weekend or Weekday
+  )
+
+```
+
+This almost a clean datraframe; however, before encoding let's drop more columns that has alraedy converted to other meaningful columns.
+```{r }
+# Drop columns B and C
+df <- df %>% select(-date, -visitStartTime)
+```
+
+
+making factor
+```{r }
+# Assuming your dataframe is df
+df <- df %>%
+  mutate(across(
+    where(is.character) | where(is.factor),
+    as.factor
+  ))
+
+```
+
+#### Encoding the categorical columns
+```{r }
+# Identify categorical columns
+categorical_columns <- names(df)[sapply(df, is.factor) | sapply(df, is.character)]
+
+# Apply target encoding
+for (cat_col in categorical_columns) {
+  # Ensure the column is treated as a factor for consistent factor level matching
+  df[[cat_col]] <- as.factor(df[[cat_col]])
+  
+  # Calculate the mean of revenue for each category
+  target_mean <- aggregate(revenue ~ get(cat_col), data = df, FUN = mean)
+  
+  # Rename columns in the target_mean data frame for clarity
+  colnames(target_mean) <- c(cat_col, paste0(cat_col, "_encoded"))
+  
+  # Merge the encoded values back into the original dataset
+  df <- merge(df, target_mean, by = cat_col, all.x = TRUE)
+  
+  # Handle any NAs created by the merge (e.g., unseen factor levels)
+  default_value <- mean(df$revenue, na.rm = TRUE)
+  df[[paste0(cat_col, "_encoded")]][is.na(df[[paste0(cat_col, "_encoded")]])] <- default_value
+  
+  # Drop the old categorical column
+  df <- df[, !names(df) %in% cat_col]
+}
+
+
+```
+
+#### rearrange columns
+```{r }
+# Reorder columns: select all columns except SalePrice, then add SalePrice at the end
+df <- df[, c(setdiff(names(df), "revenue"), "revenue")]
+```
+
+
+#### as directed, I will make a new column targetRevenue
+```{r }
+# making a pivot table that will have sum of revenue, for others it will have the average
+pivot_table <- df %>%
+  group_by(custId) %>%
+  summarise(
+    revenue_sum = sum(revenue, na.rm = TRUE),
+    across(
+      .cols = where(is.numeric) & !starts_with("revenue"), 
+      .fns = ~mean(. , na.rm = TRUE), 
+      .names = "{.col}_avg"
+    )
+  )
+
+```
+
+#### targetRevenue column
+```{r }
+# making the targetRevenue which is already the ln of revenue sum+a
+pivot_table <- pivot_table %>%
+  mutate(targetRevenue = log(revenue_sum + 1))
+
+```
+
+#### Normalization the variables
+```{r }
+pivot_table <- pivot_table %>%
+dplyr::select(-c(custId,revenue_sum))
+
+# Normalize all columns except target
+pivot_table_normalized <- pivot_table
+pivot_table$targetRevenue <- NULL
+# Apply normalization to the remaining columns
+pivot_table_normalized <- scale(pivot_table_normalized)
+# Combine the normalized data with target
+pivot_table_normalized <- data.frame(pivot_table_normalized) # Convert back to data frame
+pivot_table_normalized$targetRevenue <- pivot_table_normalized$targetRevenue
+```
+
+
+#### feature importance
+```{r }
+# Check for NA values in the target variable
+sum(is.na(pivot_table_normalized$targetRevenue))  # Should be 0
+
+# Check for NA values in the predictors
+sum(is.na(pivot_table_normalized))  # Should be 0 if no NA values are present
+
+```
+drop the columns that has missing values
+
+```{r }
+# Drop columns B and C
+pivot_table_normalized <- pivot_table_normalized %>% select(-adwordsClickInfo.isVideoAd_avg)
+```
+
+
+```{r }
+# Step 1: Fit an OLS model (assuming your dataframe is 'df' and your response variable is 'y')
+# Fit the model
+model <- lm(targetRevenue ~ ., data = pivot_table_normalized)
+
+# Get the feature importance (absolute values of the coefficients)
+feature_importance <- abs(coef(model))
+
+# Convert feature importance to a dataframe for plotting
+feature_importance_df <- data.frame(
+  feature = names(feature_importance),
+  importance = feature_importance
+)
+
+# Plot the feature importance
+print(feature_importance_df)
+
+
+```
+
+```{r }
+# Step 1: Fit an OLS model (assuming your dataframe is 'df' and your response variable is 'y')
+# Fit the model
+model <- lm(targetRevenue ~ ., data = pivot_table_normalized)
+
+# Get the feature importance (absolute values of the coefficients)
+feature_importance <- abs(coef(model))
+
+# Convert feature importance to a dataframe for plotting
+feature_importance_df <- data.frame(
+  feature = names(feature_importance),
+  importance = feature_importance
+)
+
+# Drop the intercept from the feature importance dataframe
+feature_importance_df <- feature_importance_df[feature_importance_df$feature != "(Intercept)", ]
+
+# Plot feature importance using ggplot2
+ggplot(feature_importance_df, aes(x = reorder(feature, importance), y = importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  coord_flip() +  # Flip the axes to make the labels readable
+  labs(title = "Feature Importance",
+       x = "Feature",
+       y = "Importance (Absolute Coefficient)") +
+  theme_minimal()
+```
+```{r }
+# Calculate VIF
+vif_values <- vif(model)
+
+# Print VIF values
+print(vif_values)
+```
+```{r }
+# Calculate correlation matrix for all numeric variables
+cor_matrix <- cor(pivot_table_normalized[, sapply(pivot_table_normalized, is.numeric)], use = "complete.obs")
+
+# Convert correlation matrix into a long format
+correlation_df <- as.data.frame(as.table(cor_matrix))
+names(correlation_df) <- c("Feature1", "Feature2", "Correlation")
+
+# Filter pairs with correlation greater than 0.7 and where Feature1 != Feature2
+high_correlation_pairs <- correlation_df %>%
+  filter(abs(Correlation) > 0.7 & Feature1 != Feature2)
+
+# Arrange by the absolute value of correlation
+high_correlation_pairs <- high_correlation_pairs %>%
+  arrange(desc(abs(Correlation)))
+
+# Calculate correlation with SalePrice
+cor_revenue <- cor(pivot_table_normalized[, sapply(pivot_table_normalized, is.numeric)], use = "complete.obs")["targetRevenue", ]
+cor_revenue_df <- data.frame(Feature = names(cor_revenue), CorrelationWithrevenue = cor_revenue)
+
+# Merge with SalePrice correlations
+result <- high_correlation_pairs %>%
+  left_join(cor_revenue_df, by = c("Feature1" = "Feature")) %>%
+  rename(Feature1_CorrelationWithrevenue = CorrelationWithrevenue) %>%
+  left_join(cor_revenue_df, by = c("Feature2" = "Feature")) %>%
+  rename(Feature2_CorrelationWithrevenue = CorrelationWithrevenue)
+result
+```
+
+#### dropcolumns
+```{r }
+# Drop columns B and C
+pivot_table_normalized <- pivot_table_normalized %>% dplyr:::select(-isMobile_avg, - channel_rank_avg, -channelGrouping_encoded_avg, -country_encoded_avg,-continent_encoded_avg,-visitNumber_avg,-custRank_avg)
+
+```
+
+
+```{r }
+# Set seed for reproducibility
+set.seed(123)
+
+# Create a cross-validation object
+train_control <- trainControl(method = "cv", number = 5, 
+                              savePredictions = TRUE, 
+                              summaryFunction = defaultSummary)
+
+# Fit the model using train with correct argument
+full_model <- train(targetRevenue ~ ., data = pivot_table_normalized, 
+                    trControl = train_control, method = "lm")
+
+# Summary of the model
+model_summary <- summary(full_model$finalModel)  # Access final model for summary
+
+# Calculate RMSE and R-squared
+predicted_values <- predict(full_model, newdata = pivot_table_normalized)
+
+# Calculate RMSE
+rmse_OLS <- sqrt(mean((pivot_table_normalized$targetRevenue - predicted_values)^2))
+
+# Extract R-squared from model summary
+R2_OLS <- model_summary$r.squared
+
+# Print model summary, RMSE, and R-squared
+print(model_summary)
+cat("RMSE:", rmse_OLS, "\n")
+cat("R-squared:", R2_OLS, "\n")
+```
+
+
+It is better than the challenged RMSE 0.69365
+
+
+
+
+
+
+
+
+
+
