@@ -6,25 +6,60 @@ output: pdf_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = F)
+#Adding libraries
+library(conflicted)
+library(tidyverse)  # tidyverse includes dplyr and magrittr
+library(ggplot2)
 ```
 
-## R Markdown
+## Data Vizualization
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+```{r vis}
+# Load necessary libraries
+library(VIM)
+library(outliers)
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+originalData <- read.csv("data/Train.csv/Train.csv")
+data <- originalData
+#head(data)
+#summary(data)
+#glimpse(data)
 ```
 
-## Including Plots
 
-You can also embed plots, for example:
+```{r, fig.width=10, fig.height=5}
+# decrease margin
+par(mar = c(3, 3, 1, 1))  # Reduce margins: bottom, left, top, right
+# Visualize mxwissing values
+aggr(data, col=c('navyblue','red'), numbers=T, sortVars=T,
+     # Added later
+     prop=T, combined=T, bars=T,
+     labels=names(data), cex.axis=.3, gap=1, ylab=c("Missing data","Pattern"))
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+
+# Summarize missing values and sort by number
+missing_summary <- sapply(data, function(x) sum(is.na(x)) ) %>% sort(decreasing = TRUE)
+print(missing_summary[missing_summary > 0])
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r pageview-impute}
+# Impute missing values for pageviews
+# we consider missing pageviews as 1 because it is the minimum value
+data$pageviews[is.na(data$pageviews)] <- 1
+```
+
+
+```{r feature-drop}
+# Drop columns with more than 50% missing values adwordsClickInfo.page, adwordsClickInfo.isVideoAd
+# We also drop bounces for now it has around 60% missing values (just to be sure, we can check if it adds any value to the model)
+# newVisists has around 35% missing values, needs to be imputed
+# for now we drop those columns so we won't face issues later on, but we should deal with them later
+data <- data %>%
+  select(-c(adwordsClickInfo.page, adwordsClickInfo.isVideoAd, bounces, newVisits))
+```
+
+
+```{r eval-missing-removal}
+print(paste("Number of missing values:", sum(is.na(data))))
+```
