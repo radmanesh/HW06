@@ -9,11 +9,43 @@ output: pdf_document
 knitr::opts_chunk$set(echo = F)
 #Adding libraries
 library(conflicted)
+conflict_prefer("filter", "dplyr")
 library(tidyverse)  # tidyverse includes dplyr and magrittr
 library(ggplot2)
 ```
 
-## Data Vizualization
+1.  Data Preparation
+    1.  Data Exploration
+        -   Data Visualization
+        -   Identifying issues like missing values, skewness, outliers,
+            etc.
+    2.  Data Cleaning
+        -   Missing Values
+        -   Outliers
+            -   Outlier Analysis
+            -   Prepare a outlier removal strategies
+            -   Evaluate results
+                1.  Compare strategies (We probability will select some
+                    we think are best and the comparison comes after
+                    model evaluation with different ones)
+    3.  Feature Engineering
+        -   Create new features
+        -   Analyze and evaluate each feature
+        -   Feature Selection ( Maybe this should be done before feat
+            eng? )
+            1.  Features Analysis
+            2.  B
+            3.  C
+2.  Modeling
+    1.  Build different models
+        -   A
+3.  Model Evaluation
+    1.  Method of evaluation
+        -   A
+4.  Model Interpretation
+5.  Model Selection and Deployment
+    1.  A
+    2.  B
 
 ```{r vis}
 # Load necessary libraries
@@ -21,74 +53,112 @@ library(VIM)
 library(outliers)
 
 originalData <- read.csv("data/Train.csv/Train.csv")
-data <- originalData
-#head(data)
-#summary(data)
-#glimpse(data)
+df <- originalData
+#head(df)
+#summary(df)
+#glimpse(df)
 ```
 
-
 ```{r, fig.width=10, fig.height=5}
+# Visualize missing values
+# Identify character columns
+char_cols <- sapply(df, is.character)
+#show the number of invald UTF-8 strings and empty strings for each column
+lapply(df[char_cols], function(x) {
+  invalid_utf8 <- sum(iconv(x, from = "", to = "UTF-8", sub = NA) == "")
+  empty_strings <- sum(x == "")
+  return(c(invalid_utf8, empty_strings))
+})
+
+# Replace invalid UTF-8 strings with NA
+df[char_cols] <- lapply(df[char_cols], function(x) {
+  iconv(x, from = "", to = "UTF-8", sub = NA)
+})
+
+# Trim whitespace and replace empty strings with NA
+df[char_cols] <- lapply(df[char_cols], function(x) {
+  x <- trimws(x)            # Remove leading and trailing whitespace
+  x[x == ""] <- NA          # Replace empty strings with NA
+  return(x)
+})
+
+# Verify the result
+summary(df)
 # decrease margin
 par(mar = c(3, 3, 1, 1))  # Reduce margins: bottom, left, top, right
-# Visualize mxwissing values
-aggr(data, col=c('navyblue','red'), numbers=T, sortVars=T,
-     # Added later
-     prop=T, combined=T, bars=T,
-     labels=names(data), cex.axis=.3, gap=1, ylab=c("Missing data","Pattern"))
-
+# Visualize mxissing values
+newD <- aggr(
+  df,
+  col = c('navyblue', 'red'),
+  numbers = T,
+  sortVars = T,
+  # Added later
+  prop = T,
+  combined = F,
+  bars = T,
+  varheight = T,
+  labels = names(df),
+  cex.axis = .3,
+  gap = 1,
+  ylab = c("Missing data", "Pattern")
+)
 
 # Summarize missing values and sort by number
-missing_summary <- sapply(data, function(x) sum(is.na(x)) ) %>% sort(decreasing = TRUE)
-print(missing_summary[missing_summary > 0])
+missing_summary <- sapply(df, function(x) sum(is.na(x))) %>% .[. > 0] %>%
+  sort(decreasing = TRUE)  
+#Filter non-zero missing values
+print(missing_summary)
 ```
 
 ```{r pageview-impute}
 # Impute missing values for pageviews
 # we consider missing pageviews as 1 because it is the minimum value
-data$pageviews[is.na(data$pageviews)] <- 1
+df$pageviews[is.na(df$pageviews)] <- 1
 ```
-
 
 ```{r feature-drop}
 # Drop columns with more than 50% missing values adwordsClickInfo.page, adwordsClickInfo.isVideoAd
 # We also drop bounces for now it has around 60% missing values (just to be sure, we can check if it adds any value to the model)
 # newVisists has around 35% missing values, needs to be imputed
 # for now we drop those columns so we won't face issues later on, but we should deal with them later
-data <- data %>%
-  select(-c(adwordsClickInfo.page, adwordsClickInfo.isVideoAd, bounces, newVisits))
+df <- df %>%
+  select(-c(adwordsClickInfo.page, adwordsClickInfo.isVideoAd, bounces, newVisits, #Numberic
+            campaign, adContent, adwordsClickInfo.page, adwordsClickInfo.slot,
+            adwordsClickInfo.adNetworkType, adwordsClickInfo.gclId, 
+            adwordsClickInfo.isVideoAd, keyword #Character
+        ))
 ```
-
 
 ```{r eval-missing-removal}
-print(paste("Number of missing values:", sum(is.na(data))))
+print(paste("Number of missing values:", sum(is.na(df))))
+aggr(df, col = c('navyblue', 'red'), numbers = T, sortVars = T, 
+     prop = T, combined = F, bars = T, #varheight = T, 
+     labels = names(df), cex.axis = .3, gap = 1, ylab = c("Missing data", "Pattern"))
 ```
-
-
 
 ```{r pageview-vis}
 # pageviews has around 0.1% missing values, needs to be imputed
 # plot pageviews histogram
 # limit pageviews to 50 in the plot
-ggplot(data, aes(x = pageviews)) + geom_histogram(binwidth = 1) + ggtitle("Pageviews Distribution") + theme_minimal() + xlim(0, 50)
-hist(data$pageviews, breaks = 100, col = "blue", xlab = "Pageviews", 
+ggplot(df, aes(x = pageviews)) + geom_histogram(binwidth = 1) + ggtitle("Pageviews Distribution") + theme_minimal() + xlim(0, 50)
+hist(df$pageviews, breaks = 100, col = "blue", xlab = "Pageviews", 
      xlim= ,main = "Pageviews Distribution")
 
 #plot cumulative pageviews histogram for each customer
-data_modified <- data %>%
+df_modified <- df %>%
   arrange(custId, visitStartTime) %>%
   group_by(custId) %>%
   mutate(cum_pageviews = cumsum(pageviews)) %>%
   mutate(cum_revenue = cumsum(revenue))
   
 
-ggplot(data_modified, aes(x = visitStartTime, y = cum_pageviews, group = custId)) + geom_line() + ggtitle("Cumulative Pageviews per Customer") + theme_minimal()
+ggplot(df_modified, aes(x = visitStartTime, y = cum_pageviews, group = custId)) + geom_line() + ggtitle("Cumulative Pageviews per Customer") + theme_minimal()
 
 # create new data frame with columns customerId, visitStartTime, cum_pageviews, cum_revenue, avg_pageviews, avg_revenue; so that each customer has one row
-data_modified <- data %>% 
+df_modified <- df %>% 
   add_column(
     visitStartTime = 
-      as.numeric(as.POSIXct(data$visitStartTime, origin = "1970-01-01", tz = "UTC"))
+      as.numeric(as.POSIXct(df$visitStartTime, origin = "1970-01-01", tz = "UTC"))
   ) %>%
   arrange(custId, visitStartTime) %>%
   group_by(custId) %>%
@@ -99,12 +169,12 @@ data_modified <- data %>%
     pageviews = sum(pageviews, na.rm = TRUE),
     revenue = sum(revenue, na.rm = TRUE)
   )
-data_modified$visitStartTime <- as.POSIXct(data_modified$visitStartTime, origin = "1970-01-01", tz = "UTC")
+df_modified$visitStartTime <- as.POSIXct(df_modified$visitStartTime, origin = "1970-01-01", tz = "UTC")
 # Convert 'pageviews' and 'revenue' to numeric, if they aren't already
-data_modified$pageviews <- as.numeric(data_modified$pageviews)
-data_modified$revenue <- as.numeric(data_modified$revenue)
+df_modified$pageviews <- as.numeric(df_modified$pageviews)
+df_modified$revenue <- as.numeric(df_modified$revenue)
 
-customer_summary <- data_modified %>%
+customer_summary <- df_modified %>%
   group_by(custId) %>%
   summarise(
     first_visitStartTime = min(visitStartTime, na.rm = TRUE),
@@ -116,13 +186,20 @@ customer_summary <- data_modified %>%
   )
 
 # plot histogram of cumulative pageviews
+# add number of customers in each bin on top of the bars
 ggplot(customer_summary, aes(x = cum_pageviews)) + 
-  geom_histogram(binwidth = 10) + 
-  xlim(0, 1000) +
-  ggtitle("Cumulative Pageviews Distribution") + theme_minimal()
-
-# plot histogram of cumulative pageviews
-ggplot(data_modified, aes(x = cum_pageviews)) + geom_histogram(binwidth = 100) + ggtitle("Cumulative Pageviews Distribution") + theme_minimal()
+  geom_histogram(binwidth = 10, fill = "skyblue", color = "black") + 
+  xlim(0, 100) +
+  geom_text(
+    stat = 'bin', 
+    binwidth = 10,
+    aes(y = ..count.., label = ..count..), 
+    vjust = -0.5
+  ) +
+  ggtitle("Cumulative Pageviews Distribution") + 
+  xlab("Cumulative Pageviews") +
+  ylab("Number of Customers") +
+  theme_minimal()
 
 ```
 
@@ -130,17 +207,17 @@ ggplot(data_modified, aes(x = cum_pageviews)) + geom_histogram(binwidth = 100) +
 
 ```{r outliers}
 # Detect outliers using boxplots
-numeric_columns <- sapply(data, is.numeric)
-data_numeric <- data[, numeric_columns]
+numeric_columns <- sapply(df, is.numeric)
+df_numeric <- df[, numeric_columns]
 
 
 
 par(mfrow = c(3, 3))
 # Boxplot for each numeric column
-for (col in names(data_numeric)) {
+for (col in names(df_numeric)) {
   print(col)
   pl <- 
-    ggplot(data, aes(x = col)) +
+    ggplot(df, aes(x = col)) +
       geom_boxplot() +
       ggtitle(paste("Boxplot of", col)) +
       theme_minimal() +
@@ -150,7 +227,7 @@ for (col in names(data_numeric)) {
 }
 
 # Detect outliers using statistical methods
-outlier_summary <- sapply(data_numeric, function(x) {
+outlier_summary <- sapply(df_numeric, function(x) {
   if (length(unique(x)) > 1) {
     return(outlier(x))
   } else {
@@ -159,33 +236,136 @@ outlier_summary <- sapply(data_numeric, function(x) {
 })
 print(outlier_summary)
 ```
+
 ```{r vis-cont}
 library(corrplot)
 library(lubridate)
-cor_matrix <- cor(data_numeric, use = "complete.obs")
+cor_matrix <- cor(df_numeric, use = "complete.obs")
 corrplot(cor_matrix, method = "circle")
 
 # Calculate and visualize statistics
-unique_customers <- length(unique(data$custId))
+unique_customers <- length(unique(df$custId))
 print(paste("Number of unique customers:", unique_customers))
 
-transactions_per_customer <- data %>% group_by(custId) %>% summarise(transactions = n())
+transactions_per_customer <- df %>% group_by(custId) %>% summarise(transactions = n())
 print(transactions_per_customer)
 
 avg_transactions_per_customer <- mean(transactions_per_customer$transactions)
 print(paste("Average transactions per customer:", avg_transactions_per_customer))
 
-avg_revenue_per_transaction <- data %>% group_by(custId) %>% summarise(avg_revenue = mean(revenue, na.rm = TRUE))
+avg_revenue_per_transaction <- df %>% group_by(custId) %>% summarise(avg_revenue = mean(revenue, na.rm = TRUE))
 print(avg_revenue_per_transaction)
 
-transactions_until_purchase <- data %>% group_by(custId) %>% summarise(transactions_until_purchase = min(which(revenue > 0)))
+transactions_until_purchase <- df %>% group_by(custId) %>% summarise(transactions_until_purchase = min(which(revenue > 0)))
 print(transactions_until_purchase)
 
 # Visualize distributions
-ggplot(data, aes(x = revenue)) + geom_histogram(binwidth = 10) + ggtitle("Revenue Distribution") + theme_minimal()
+ggplot(df, aes(x = revenue)) + geom_histogram(binwidth = 10) + ggtitle("Revenue Distribution") + theme_minimal()
+ggplot(df, aes(x = timeOnSite)) + geom_histogram(binwidth = 10) + ggtitle("Time on Site Distribution") + theme_minimal()
+ggplot(df, aes(x = pageviews)) + geom_histogram(binwidth = 10) + ggtitle("Pageviews Distribution") + theme_minimal()
+ggplot(df, aes(x = transactions_until_purchase)) + geom_histogram(binwidth = 1) + ggtitle("Transactions Until Purchase Distribution") + theme_minimal()
+```
 
+```{r }
+library(car)      #for some extra diagnostic tools
+library(ggplot2)  #for plotting
+
+
+#check for linearity
+#basic linear model
+fit<-lm(data=df,sr ~ pop15 + pop75 + dpi + ddpi)
+summary(fit)
+
+
+#test for non-constant variance
+ncvTest(fit)
+
+
+#residual plot
+plot(fit$fitted.values,fit$residuals, col = "black", pch = 21, bg = "red") 
+abline(h=0)
+
+#histogram of residuals
+qplot(fit$resid) + geom_histogram(binwidth=2)
+
+#qq plot of residuals
+qqnorm(fit$resid)
+qqline(fit$resid)
+
+# partial residual plots
+par(mfrow=c(2,2))
+plot(df$pop15,fit$residuals, col = "black", pch = 21, bg = "red") 
+abline(h=0)
+plot(df$pop75,fit$residuals, col = "black", pch = 21, bg = "red") 
+abline(h=0)
+plot(df$dpi,fit$residuals, col = "black", pch = 21, bg = "red") 
+abline(h=0)
+plot(df$ddpi,fit$residuals, col = "black", pch = 21, bg = "red") 
+abline(h=0)
+dev.off()
+
+
+#index leverage plot
+plot(hatvalues(fit),col = "black", pch = 21, bg = "red")      #index plot of leverages
+abline(h=2*5/50)
+
+hatvalues(fit)[hatvalues(fit)>0.2]
+
+#plot residuals vs. hatvalues
+plot(hatvalues(fit),fit$residuals,col = "black", pch = 21, bg = "red")    #leverages and residuals
+abline(h=0,v=2*5/50)
+
+#standardized residuals (index plot) ----- 
+plot(rstandard(fit),col = "black", pch = 21, bg = "red")      # index standardized residual plot
+abline(h=c(-2,2), lty = 2)
+
+#we can interactively identify points
+identify(1:50,rstandard(fit),labels=names(fit$fitted.values))  #interactive click and identify points
+
+
+#standardized residuals vs. fitted values ----- 
+plot(fit$fitted.values,rstandard(fit),col = "black", pch = 21, bg = "red")      #standardized residuals and fitted values
+abline(h=c(-2,2), lty = 2)
+
+identify(fit$fitted.values,rstandard(fit),labels=names(fit$fitted.values))
+
+
+# studentized residuals vs. fitted values ---------
+plot(fit$fitted.values,rstudent(fit),col = "black", pch = 21, bg = "red")      #standardized residuals and fitted values
+abline(h=c(-2,2), lty = 2)                                                     # FYI -- in this case it looks almost the same as the previous plot
+identify(fit$fitted.values,rstandard(fit),labels=names(fit$fitted.values))
+
+#outlier test from car package
+outlierTest(fit)
+
+
+#studentized residals vs. Cook's D
+plot(cooks.distance(fit),rstudent(fit),col = "black", pch = 21, bg = "red")
+
+# automatic plots from R for linear models
+plot(fit)
+
+
+# several influence measures
+influence.measures(fit)
+
+# influence plot from car package
+influencePlot(fit)
+
+# residual plots from car package
+residualPlots(fit)
+
+#variation inflation factor from car package
+vif(fit)
+
+```
+
+
+## Feature Engineering
+
+```{r, fig.width=10, fig.height=5}
 # Feature engineering
-data <- data %>%
+df <- df %>%
   arrange(custId, visitStartTime) %>%
   group_by(custId) %>%
   mutate(
@@ -193,15 +373,15 @@ data <- data %>%
     session_number = row_number(),
     lag_revenue = lag(revenue, order_by = visitStartTime),
     time_since_first_visit = as.numeric(difftime(visitStartTime, first(visitStartTime), units = "days")),
-    time_between_visits = as.numeric(difftime(visitStartTime, lag(visitStartTime), units = "days")),
-    time_since_last_purchase = as.numeric(difftime(visitStartTime, lag(visitStartTime[revenue > 0]), units = "days")),
+    time_between_visits = as.numeric(difftime(visitStartTime, dplyr::lag(visitStartTime), units = "days")),
+    time_since_last_purchase = as.numeric(difftime(visitStartTime, dplyr::lag(visitStartTime[revenue > 0]), units = "days")),
     cum_pageviews = cumsum(pageviews),
     cum_bounces = cumsum(bounces, na.rm = TRUE),
     cum_time_on_site = cumsum(timeSinceLastVisit, na.rm = TRUE)
   )
 
 # Summarize data into fixed windows
-data_summary <- data %>%
+df_summary <- df %>%
   group_by(custId) %>%
   summarise(
     first_5_sessions = list(head(session_number, 5)),
@@ -211,7 +391,7 @@ data_summary <- data %>%
   )
 
 # Compute statistical summaries
-data_stats <- data %>%
+df_stats <- df %>%
   group_by(custId) %>%
   summarise(
     mean_pageviews = mean(pageviews, na.rm = TRUE),
@@ -222,7 +402,7 @@ data_stats <- data %>%
   )
 
 # Count specific events/behaviors
-event_counts <- data %>%
+event_counts <- df %>%
   group_by(custId) %>%
   summarise(
     num_bounces = sum(bounces, na.rm = TRUE),
@@ -230,7 +410,7 @@ event_counts <- data %>%
   )
 
 # Calculate trends over time
-data_trends <- data %>%
+df_trends <- df %>%
   group_by(custId) %>%
   summarise(
     pageviews_trend = coef(lm(pageviews ~ session_number))[2],
@@ -238,8 +418,8 @@ data_trends <- data %>%
   )
 
 # Print summaries
-print(data_summary)
-print(data_stats)
+print(df_summary)
+print(df_stats)
 print(event_counts)
-print(data_trends)
+print(df_trends)
 ```
